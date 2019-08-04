@@ -1,0 +1,303 @@
+---
+title: "Student Performance"
+output: html_notebook
+---
+
+This is R notebook to predict student performance in maths in secondary education
+
+```{r}
+#loading the libraries
+library(MASS)
+library(readr)
+library(dplyr)
+library(corrplot)
+library(texreg)
+library(leaps)
+library(cvTools)
+library(splines)
+library(tree)
+library(randomForest)
+library(ISLR)
+```
+
+Loading the dataset
+```{r}
+stud_per <- read.csv("student-m.csv")
+stud_per <- as.data.frame(stud_per) 
+#converting the file as a data frame so that our predictors are either numerical or factor
+head(stud_per) #check the dataset
+```
+
+```{r}
+# removing columns that are not required for analysis
+stud_per <- stud_per[,c(-9,-10,-12,-15,-20,-24,-28,-31,-32)]
+str(stud_per)
+```
+
+##### Plot a histogram to see the performance of the students
+```{r}
+hist(stud_per$G3, main = "Histogram of Final Scores in Maths", xlab = "Score", ylab = "No. of Students" , ylim = c(0,100), breaks = 10, col = '#FFFF00')
+#The histogram seems to be normally distributed
+#We can say that maximum number of students are scoring around 10 marks as their final score in maths exam
+```
+
+```{r}
+#to see the summary of the scores of the students, we can see the mean to be 10.42
+summary(stud_per$G3)
+```
+
+***
+### T-test 
+To perform a T-test to find the difference between two conditional means.
+```{r}
+t.test(stud_per$G3~stud_per$address)
+# by the t-test we can say
+# that the students in the urban areas have better performance in their final scores than the students from the rural areas
+```
+```{r}
+# we can view the above relation as a boxplot also to better understand it
+boxplot(G3~address, data = stud_per)
+# 'R' means 'rural' and 'U' means 'urban'
+```
+
+***
+#### Correlation between various quantitative predictors
+```{r}
+#Getting the data with numerical predictors only
+stud_per_num <- stud_per[,sapply(stud_per, is.numeric)] 
+corrplot(cor(stud_per_num)) #plotting the correlation plot for the numerical value dataset
+```
+By the above plot, we can see that 
+- Medu(Mother's Education) is highly correlated to Fedu(Father's education)
+- Student's Score(G3) is correlated to predictors: Medu, Fedu, studytime and so on.
+
+
+
+***
+
+# Linear regreesion
+
+### Bivariate Linear Regression Model
+```{r}
+plot(stud_per$G3 ~ stud_per$studytime ,pch =20, col = '#71B1DC')
+lm1 <- lm(G3 ~ studytime, data = stud_per )
+abline(lm1, col = 'red')
+```
+
+
+```{r}
+screenreg(lm1) #some findings of the model lm1 in a readable table format 
+```
+
+### Multivariate Linear Regression Model
+```{r}
+lm2 <- lm(G3 ~ absences+age, data = stud_per)
+plot(G3 ~ absences+age, data = stud_per )
+abline(lm2)
+```
+
+
+```{r}
+screenreg(list(lm1, lm2)) #some findings comparing the model 'lm1' with 'lm2' in a readable table format 
+```
+
+
+#### Spliting the data into training and test data sets
+```{r}
+
+set.seed(10) #seed to get same output every time
+
+
+stud_per$good <- ifelse(stud_per$G3 <= 9, "No", "Yes")
+#another column as character added to show the score is good or not
+stud_per$good <- as.factor(stud_per$good)
+
+# randomly select half the rows
+# n%/%2 forces division result to be integer, 
+n <- nrow(stud_per)
+data_train_rows <- sample(1:n, size = n%/%2, replace = FALSE)
+train_stud <- stud_per[data_train_rows, ]   #training dataset
+test_stud <- stud_per[-data_train_rows, ]   #test dataset
+```
+
+
+***
+
+## Linear Regression 
+Performing Stepwise selection to generate set of best performing models
+```{r}
+my_lm = lm(G3~.,data=train_stud)
+AIC(my_lm)
+
+# lower AIC means better performance
+# AIC takes into account number of predictors
+
+lm.min <- lm(G3 ~ 1, data=train_stud) #lower bound
+lm.max <- lm(G3 ~ ., data=train_stud) #upper bound
+
+scp <- list(lower = lm.min, upper = lm.max)
+
+lm.selected <- stepAIC(lm.min, 
+                       direction = 'both',
+                       scope = scp,
+                       steps = 12)
+# we get our best performing model (with lowest AIC value) in the 12th step
+```
+
+
+#### Selecting variables for model based on exhaustive testing of all possibilities
+```{r}
+regsubsets.out <- regsubsets( G3 ~ .,
+                              data = stud_per,
+                              nbest = 1,
+                              nvmax = NULL,
+                              force.in = NULL, force.out = NULL,
+                              method = 'exhaustive')
+summary(regsubsets.out)
+  
+as.data.frame(summary(regsubsets.out)$outmat)
+plot(regsubsets.out, scale='adjr2', main='Adjusted Rsq')
+
+#this is another method of getting a good model comprising of many predictors
+```
+
+
+```{r}
+# Analysing the model formed by stepwise selection in a table form
+best_lm <- lm(G3 ~ good + Medu + higher + absences + romantic + famsize + traveltime + 
+     studytime + sex + school + schoolsup, data = train_stud)
+screenreg(best_lm)
+#By this table, we can infer that 
+# - the model we get with the help of stepwise selection has a R^2^ value of 0.68. This suggests that this model explains about 68% of the varaition in the score of the students.
+# - Also a one point increase in the percentage of students of school "MS" is associated with an increase of 1.22 percentage of the score
+```
+We have the RMSE value = 2.75
+
+#### cvFit
+To investigate cross validated performance of models
+```{r}
+cv_out <- cvFit(best_lm, data = train_stud, y = train_stud$G3, 
+    K = 5, R = 10, seed = 1234)
+cv_out$cv
+# So, cv value comes to be 2.875
+cv_out$se   #standard error
+
+```
+
+```{r}
+#predict the mse for the test data 
+pred_lr <- predict(best_lm, newdata = test_stud)
+mse_linear_R <-  mean((pred_lr-test_stud$G3)^2)
+mse_linear_R
+#We got the mse for Linear regression model
+```
+
+***
+***
+
+
+# Trees
+```{r}
+set.seed(3)
+tree.stud <- tree(G3 ~ ., train_stud)
+plot(tree.stud)
+text(tree.stud, pretty = 1, cex=0.7, col='red') 
+#print(tree.stud)
+```
+
+```{r}
+tree.pred <- predict(tree.stud, train_stud)
+plot(tree.pred,train_stud$G3, pch = 20, col= 'blue')
+abline(a=0,b=1)
+```
+
+
+### Pruning the Trees
+```{r}
+set.seed(3)
+cv.stud <- cv.tree(tree.stud, FUN = prune.tree)
+cv.stud
+```
+
+```{r}
+par(mfrow = c(1, 2))
+plot(cv.stud$size, cv.stud$dev, type = "b")
+plot(cv.stud$k, cv.stud$dev, type = "b")
+# From the above plot, we can see that the best performing tree would be at the size=3
+```
+
+```{r}
+#So, implementing tree for the best best size
+prune.stud <- prune.tree(tree.stud, best = 3)
+plot(prune.stud)
+text(prune.stud, pretty = 0, col = 'blue')
+```
+```{r}
+#Evaluating the performance on our test dataset
+tree.pred <- predict(prune.stud, test_stud)
+plot(tree.pred,test_stud$G3)
+abline(a=0,b=1, col= 'red')
+
+```
+```{r}
+mean_prune <- mean((tree.pred-test_stud$G3)^2)
+mean_prune
+#mean squared error on test data is worse than the train data in pruning tree
+```
+
+
+***
+
+### Random Forest
+```{r}
+#bagging
+set.seed(5)
+bag_tree = randomForest(G3 ~ ., data = train_stud, mtry=24, importance =TRUE)
+ 
+plot(bag_tree$mse, xlab="N Trees", ylab="MSE", ylim=c(0,12),type='l')
+# random forest
+rf_tree = randomForest(G3 ~ ., data = train_stud, mtry=5, importance =TRUE)
+lines(rf_tree$mse,col='green')
+
+rf_tree = randomForest(G3 ~ ., data = train_stud, mtry=13, importance =TRUE)
+lines(rf_tree$mse,col='red')
+```
+
+
+```{r}
+pred_rf <- predict(rf_tree, newdata = test_stud)
+mean_rf_tree <- mean((pred_rf-test_stud$G3)^2)
+mean_rf_tree
+
+#we calculated the mse for the test data on random forest tree
+# rf_tree$mse stores the MSE calculated on the Out-Of-Bag 
+```
+
+
+```{r}
+rf_tree
+#we can see the total no. of trees =500, R^2=7.71
+```
+
+***
+## Summary
+
+In this report, the student performance dataset was used so that I can predict the various factors which may lead to a change in performance in the score of the students. I applied various models in this dataset to understand how various predictors are correlated with each other and how they affect the student's performance.
+
+This report is developed on 'R' using the various libraries and functions of the R language. I first analyzed the current score by plotting the score data in a histogram.
+
+First, a linear regression was performed using stepwise selection to generate the best performing models that have different types of predictors.
+
+Second, Decision Tree fitting was performed on the dataset. Pruning method and the random forest method was performed. 
+
+Each of these methods was trained on a training dataset and were analyzed on a test dataset. For each method performed, the Mean Standard Error(MSE) was analyzed.
+
+The MSE of the respective models are:
+Methods                   |   MSE 
+------------------------- |  -------------
+Linear Regression         |   8.654321
+Pruning Tree Method       |   6.296286
+Random Forest Method      |   6.498735
+
+The method with lower MSE is better.
+So, this can be inferred from the table that for the given dataset the pruning tree method is better than the others
